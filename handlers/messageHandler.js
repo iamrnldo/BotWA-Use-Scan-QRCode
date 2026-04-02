@@ -47,15 +47,12 @@ loadConfig();
 function isOwner(userId) {
   return userId === botConfig.owner;
 }
-
 function isAdminUser(userId) {
   return botConfig.admins.includes(userId);
 }
-
 function isBanned(userId) {
   return botConfig.bannedUsers.includes(userId);
 }
-
 function getUserRole(userId) {
   if (isOwner(userId)) return "👑 OWNER";
   if (isAdminUser(userId)) return "🛡️ ADMIN";
@@ -72,12 +69,10 @@ function getState(message) {
   const key = `${message.from}_${message.author || message.from}`;
   return userState.get(key) || null;
 }
-
 function setState(message, menu) {
   const key = `${message.from}_${message.author || message.from}`;
   userState.set(key, { menu, lastActivity: Date.now() });
 }
-
 function clearState(message) {
   const key = `${message.from}_${message.author || message.from}`;
   userState.delete(key);
@@ -86,11 +81,34 @@ function clearState(message) {
 setInterval(() => {
   const now = Date.now();
   for (const [key, val] of userState.entries()) {
-    if (now - val.lastActivity > 10 * 60 * 1000) {
-      userState.delete(key);
-    }
+    if (now - val.lastActivity > 10 * 60 * 1000) userState.delete(key);
   }
 }, 60000);
+
+// ═══════════════════════════════════════════════════════
+//  📨 INTERACTIVE MESSAGE HELPER
+//  WhatsApp blocks buttons for unofficial APIs since 2023
+//  This uses Poll messages as interactive "buttons"
+//  Polls STILL WORK on whatsapp-web.js!
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Send a Poll as interactive menu (polls still work!)
+ * User selects an option → bot receives poll_vote event
+ */
+async function sendPollMenu(chatId, title, options) {
+  try {
+    const { Poll } = require("whatsapp-web.js");
+    if (Poll) {
+      const poll = new Poll(title, options, { allowMultipleAnswers: false });
+      await client.sendMessage(chatId, poll);
+      return true;
+    }
+  } catch (e) {
+    // Poll not available in this version
+  }
+  return false;
+}
 
 // ═══════════════════════════════════════════════════════
 //  SETUP MESSAGE HANDLER
@@ -103,9 +121,10 @@ function setupMessageHandler() {
       const contact = await message.getContact();
 
       if (message.from === "status@broadcast") return;
+      // Ignore messages sent by the bot itself
+      if (message.fromMe) return;
 
       const userId = contact.id._serialized;
-
       if (isBanned(userId)) return;
 
       console.log(
@@ -174,7 +193,6 @@ async function handleMessage(message, contact, chat) {
   const name = contact.pushname || contact.number || "Friend";
   const isGroup = chat.isGroup;
   const userId = contact.id._serialized;
-  const role = getUserRole(userId);
 
   // ─── PREFIX COMMANDS (.menu, .ping, etc.) ───
   const prefixMatch = text.match(/^[.!/](\w+)\s*([\s\S]*)/);
@@ -186,108 +204,64 @@ async function handleMessage(message, contact, chat) {
     await chat.sendStateTyping();
     await delay(500);
 
-    // ══════════════════════════════════
-    //  OWNER ONLY COMMANDS
-    // ══════════════════════════════════
-
+    // ══ OWNER ONLY ══
     if (command === "owner") {
-      if (!isOwner(userId)) {
-        return message.reply(
-          "🚫 *Akses Ditolak!*\n\nHanya Owner yang bisa membuka menu ini.",
-        );
-      }
+      if (!isOwner(userId))
+        return message.reply("🚫 *Akses Ditolak!*\nHanya Owner.");
       return await showOwnerMenu(message);
     }
-
     if (command === "addcommand") {
-      if (!isOwner(userId)) {
-        return message.reply(
-          "🚫 *Akses Ditolak!*\nHanya Owner yang bisa menambah command.",
-        );
-      }
+      if (!isOwner(userId)) return message.reply("🚫 *Akses Ditolak!*");
       return await cmdAddCommand(message, args);
     }
-
     if (command === "delcommand") {
-      if (!isOwner(userId)) {
-        return message.reply(
-          "🚫 *Akses Ditolak!*\nHanya Owner yang bisa menghapus command.",
-        );
-      }
+      if (!isOwner(userId)) return message.reply("🚫 *Akses Ditolak!*");
       return await cmdDelCommand(message, args);
     }
-
     if (command === "listcommand" || command === "listcmd") {
-      if (!isOwner(userId)) {
-        return message.reply("🚫 *Akses Ditolak!*");
-      }
+      if (!isOwner(userId)) return message.reply("🚫 *Akses Ditolak!*");
       return await cmdListCommand(message);
     }
-
     if (command === "addadmin") {
-      if (!isOwner(userId)) {
-        return message.reply(
-          "🚫 *Akses Ditolak!*\nHanya Owner yang bisa menambah admin.",
-        );
-      }
+      if (!isOwner(userId)) return message.reply("🚫 *Akses Ditolak!*");
       return await cmdAddAdmin(message, chat, args);
     }
 
-    // ══════════════════════════════════
-    //  OWNER + ADMIN COMMANDS
-    // ══════════════════════════════════
-
+    // ══ OWNER + ADMIN ══
     if (command === "adminmenu") {
-      if (!isOwner(userId) && !isAdminUser(userId)) {
-        return message.reply(
-          "🚫 *Akses Ditolak!*\nHanya Admin/Owner yang bisa membuka menu ini.",
-        );
-      }
+      if (!isOwner(userId) && !isAdminUser(userId))
+        return message.reply("🚫 *Akses Ditolak!*");
       return await showAdminRoleMenu(message);
     }
-
     if (command === "deladmin") {
-      if (!isOwner(userId) && !isAdminUser(userId)) {
+      if (!isOwner(userId) && !isAdminUser(userId))
         return message.reply("🚫 *Akses Ditolak!*");
-      }
       return await cmdDelAdmin(message, chat, args, userId);
     }
-
     if (command === "banuser") {
-      if (!isOwner(userId) && !isAdminUser(userId)) {
+      if (!isOwner(userId) && !isAdminUser(userId))
         return message.reply("🚫 *Akses Ditolak!*");
-      }
       return await cmdBanUser(message, chat, args, userId);
     }
-
     if (command === "unban") {
-      if (!isOwner(userId) && !isAdminUser(userId)) {
+      if (!isOwner(userId) && !isAdminUser(userId))
         return message.reply("🚫 *Akses Ditolak!*");
-      }
       return await cmdUnbanUser(message, args);
     }
-
     if (command === "listadmin") {
-      if (!isOwner(userId) && !isAdminUser(userId)) {
+      if (!isOwner(userId) && !isAdminUser(userId))
         return message.reply("🚫 *Akses Ditolak!*");
-      }
       return await cmdListAdmin(message);
     }
-
     if (command === "listban") {
-      if (!isOwner(userId) && !isAdminUser(userId)) {
+      if (!isOwner(userId) && !isAdminUser(userId))
         return message.reply("🚫 *Akses Ditolak!*");
-      }
       return await cmdListBan(message);
     }
 
-    // ══════════════════════════════════
-    //  PUBLIC COMMANDS
-    // ══════════════════════════════════
-
-    if (command === "menu" || command === "start" || command === "help") {
+    // ══ PUBLIC ══
+    if (command === "menu" || command === "start" || command === "help")
       return await showMainMenu(message, name, isGroup, userId);
-    }
     if (command === "ping") return await cmdPing(message);
     if (command === "sticker" || command === "s")
       return await cmdSticker(message, chat);
@@ -295,38 +269,26 @@ async function handleMessage(message, contact, chat) {
       if (!isGroup) return message.reply("❌ Group only.");
       return await cmdTagAll(message, chat, contact);
     }
-
-    // ── BUAT WEB ──
-    if (
-      command === "buatweb" ||
-      command === "jasaweb" ||
-      command === "website"
-    ) {
+    if (["buatweb", "jasaweb", "website"].includes(command))
       return await showBuatWebMenu(message);
-    }
-
-    // ── GAMES ──
     if (command === "games") return await showGamesMenu(message);
     if (command === "roll" || command === "dice") return await cmdDice(message);
     if (command === "flip" || command === "coin")
       return await cmdCoinFlip(message);
     if (command === "joke") return await cmdJoke(message);
     if (command === "quote") return await cmdQuote(message);
-
-    // ── TOOLS ──
     if (command === "tools") return await showToolsMenu(message);
     if (command === "calc") return await cmdCalc(message, args);
     if (command === "uppercase" && args)
-      return await message.reply(`🔤 ${args.toUpperCase()}`);
+      return message.reply(`🔤 ${args.toUpperCase()}`);
     if (command === "lowercase" && args)
-      return await message.reply(`🔡 ${args.toLowerCase()}`);
+      return message.reply(`🔡 ${args.toLowerCase()}`);
     if (command === "reverse" && args)
-      return await message.reply(`🔄 ${args.split("").reverse().join("")}`);
+      return message.reply(`🔄 ${args.split("").reverse().join("")}`);
 
-    // ── Check Custom Commands ──
-    if (botConfig.customCommands[command]) {
-      return await message.reply(botConfig.customCommands[command]);
-    }
+    // Check custom commands
+    if (botConfig.customCommands[command])
+      return message.reply(botConfig.customCommands[command]);
 
     return message.reply(
       `❌ Command tidak dikenal: *${command}*\n\nKetik *.menu* untuk bantuan.`,
@@ -353,7 +315,10 @@ async function handleMessage(message, contact, chat) {
     return;
   }
 
-  if (state && ["0", "back", "kembali", "batal"].includes(textLower)) {
+  if (
+    state &&
+    ["0", "back", "kembali", "batal", "cancel"].includes(textLower)
+  ) {
     return await showMainMenu(message, name, isGroup, userId);
   }
 
@@ -366,7 +331,7 @@ async function handleMessage(message, contact, chat) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  TEXT INPUT HANDLER (for calc, uppercase, etc.)
+//  TEXT INPUT HANDLER
 // ═══════════════════════════════════════════════════════
 
 async function handleTextInput(message, menu, name, isGroup) {
@@ -377,22 +342,18 @@ async function handleTextInput(message, menu, name, isGroup) {
       await cmdCalc(message, text);
       setState(message, "tools");
       break;
-
     case "uppercase":
       await message.reply(`🔤 *Hasil:*\n${text.toUpperCase()}`);
       setState(message, "tools");
       break;
-
     case "lowercase":
       await message.reply(`🔡 *Hasil:*\n${text.toLowerCase()}`);
       setState(message, "tools");
       break;
-
     case "reverse":
       await message.reply(`🔄 *Hasil:*\n${text.split("").reverse().join("")}`);
       setState(message, "tools");
       break;
-
     case "count":
       await message.reply(
         `📏 *Statistik Teks:*\n\n` +
@@ -401,12 +362,10 @@ async function handleTextInput(message, menu, name, isGroup) {
       );
       setState(message, "tools");
       break;
-
     case "8ball":
       await cmd8Ball(message, text);
       setState(message, "games");
       break;
-
     case "rate":
       const rating = Math.floor(Math.random() * 10) + 1;
       const stars =
@@ -417,7 +376,6 @@ async function handleTextInput(message, menu, name, isGroup) {
       );
       setState(message, "games");
       break;
-
     default:
       break;
   }
@@ -438,7 +396,6 @@ async function handleNumberReply(
   userId,
 ) {
   switch (menu) {
-    // ── MAIN MENU ──
     case "main":
       switch (choice) {
         case 1:
@@ -463,15 +420,14 @@ async function handleNumberReply(
           break;
         default:
           await message.reply(
-            "❌ Pilihan tidak valid.\nBalas *back* untuk kembali.",
+            "❌ Pilihan tidak valid.\nBalas *0* untuk kembali ke menu.",
           );
       }
       break;
 
-    // ── OWNER MENU ──
     case "owner":
       switch (choice) {
-        case 1: // Add Command
+        case 1:
           setState(message, "addcmd_prompt");
           await client.sendMessage(
             message.from,
@@ -479,73 +435,60 @@ async function handleNumberReply(
               `Kirim dalam format:\n` +
               `*keyword|respon bot*\n\n` +
               `Contoh:\n` +
-              `_salam|Assalamualaikum! 👋_\n` +
-              `_jadwal|Senin-Jumat: 08:00-17:00_\n\n` +
+              `_salam|Assalamualaikum! 👋_\n\n` +
               `Balas *cancel* untuk batal`,
           );
           break;
-        case 2: // Del Command
+        case 2:
           await cmdListCommand(message);
           setState(message, "delcmd_prompt");
           await delay(1000);
           await client.sendMessage(
             message.from,
-            `🗑️ Ketik nama command yang mau dihapus\n` +
-              `(tanpa titik/prefix)\n\n` +
-              `Balas *cancel* untuk batal`,
+            `🗑️ Ketik nama command yang mau dihapus\n(tanpa titik/prefix)\n\nBalas *cancel* untuk batal`,
           );
           break;
-        case 3: // List Commands
+        case 3:
           await cmdListCommand(message);
           setState(message, "owner");
           break;
-        case 4: // Add Admin
+        case 4:
           setState(message, "addadmin_prompt");
           await client.sendMessage(
             message.from,
-            `➕ *TAMBAH ADMIN*\n\n` +
-              `Kirim nomor WhatsApp:\n` +
-              `Contoh: _6281234567890_\n\n` +
-              `Balas *cancel* untuk batal`,
+            `➕ *TAMBAH ADMIN*\n\nKirim nomor WhatsApp:\nContoh: _6281234567890_\n\nBalas *cancel* untuk batal`,
           );
           break;
-        case 5: // Del Admin
+        case 5:
           await cmdListAdmin(message);
           setState(message, "deladmin_prompt");
           await delay(1000);
           await client.sendMessage(
             message.from,
-            `🗑️ Kirim nomor admin yang mau dihapus:\n` +
-              `Contoh: _6281234567890_\n\n` +
-              `Balas *cancel* untuk batal`,
+            `🗑️ Kirim nomor admin yang mau dihapus:\nBalas *cancel* untuk batal`,
           );
           break;
-        case 6: // Ban User
+        case 6:
           setState(message, "ban_prompt");
           await client.sendMessage(
             message.from,
-            `🚫 *BAN USER*\n\n` +
-              `Kirim nomor WhatsApp:\n` +
-              `Contoh: _6281234567890_\n\n` +
-              `Balas *cancel* untuk batal`,
+            `🚫 *BAN USER*\n\nKirim nomor WhatsApp:\nContoh: _6281234567890_\n\nBalas *cancel* untuk batal`,
           );
           break;
-        case 7: // Unban
+        case 7:
           await cmdListBan(message);
           setState(message, "unban_prompt");
           await delay(1000);
           await client.sendMessage(
             message.from,
-            `✅ Kirim nomor yang mau di-unban:\n` +
-              `Contoh: _6281234567890_\n\n` +
-              `Balas *cancel* untuk batal`,
+            `✅ Kirim nomor yang mau di-unban:\nBalas *cancel* untuk batal`,
           );
           break;
-        case 8: // List Admin
+        case 8:
           await cmdListAdmin(message);
           setState(message, "owner");
           break;
-        case 9: // List Ban
+        case 9:
           await cmdListBan(message);
           setState(message, "owner");
           break;
@@ -557,10 +500,9 @@ async function handleNumberReply(
       }
       break;
 
-    // ── ADMIN MENU ──
     case "admin_role":
       switch (choice) {
-        case 1: // Del Admin
+        case 1:
           await cmdListAdmin(message);
           setState(message, "deladmin_prompt");
           await delay(1000);
@@ -569,14 +511,14 @@ async function handleNumberReply(
             `🗑️ Kirim nomor admin yang mau dihapus:\nBalas *cancel* untuk batal`,
           );
           break;
-        case 2: // Ban User
+        case 2:
           setState(message, "ban_prompt");
           await client.sendMessage(
             message.from,
             `🚫 *BAN USER*\n\nKirim nomor WhatsApp:\nBalas *cancel* untuk batal`,
           );
           break;
-        case 3: // Unban
+        case 3:
           await cmdListBan(message);
           setState(message, "unban_prompt");
           await delay(1000);
@@ -601,7 +543,6 @@ async function handleNumberReply(
       }
       break;
 
-    // ── PROMPTS (text input after number selection) ──
     case "addcmd_prompt":
       await handleAddCmdInput(
         message,
@@ -611,7 +552,6 @@ async function handleNumberReply(
         userId,
       );
       break;
-
     case "delcmd_prompt":
       await handleDelCmdInput(
         message,
@@ -621,7 +561,6 @@ async function handleNumberReply(
         userId,
       );
       break;
-
     case "addadmin_prompt":
       await handleAddAdminInput(
         message,
@@ -631,7 +570,6 @@ async function handleNumberReply(
         userId,
       );
       break;
-
     case "deladmin_prompt":
       await handleDelAdminInput(
         message,
@@ -641,11 +579,9 @@ async function handleNumberReply(
         userId,
       );
       break;
-
     case "ban_prompt":
       await handleBanInput(message, message.body.trim(), name, isGroup, userId);
       break;
-
     case "unban_prompt":
       await handleUnbanInput(
         message,
@@ -656,7 +592,6 @@ async function handleNumberReply(
       );
       break;
 
-    // ── BUAT WEB ──
     case "buatweb":
       switch (choice) {
         case 1:
@@ -673,7 +608,7 @@ async function handleNumberReply(
           break;
         default:
           await message.reply(
-            "❌ Balas *1*, *2*, atau *3*\nBalas *back* untuk kembali.",
+            "❌ Balas *1*, *2*, atau *3*\nBalas *0* untuk kembali.",
           );
       }
       break;
@@ -689,7 +624,9 @@ async function handleNumberReply(
           await showBuatWebMenu(message);
           break;
         default:
-          await message.reply("❌ Balas *1* untuk order\nBalas *back* untuk kembali.");
+          await message.reply(
+            "❌ Balas *1* untuk order\nBalas *0* untuk kembali.",
+          );
       }
       break;
 
@@ -697,10 +634,7 @@ async function handleNumberReply(
       switch (choice) {
         case 1:
           await message.reply(
-            `✅ *Terima kasih!*\n\n` +
-              `Silakan kirim data:\n\n` +
-              `Nama: [nama]\nJenis: [jenis web]\nReferensi: [link]\nDeadline: [tanggal]\n\n` +
-              `📞 wa.me/6287719010818`,
+            `✅ *Terima kasih!*\n\nSilakan kirim data:\n\nNama: [nama]\nJenis: [jenis web]\nReferensi: [link]\nDeadline: [tanggal]\n\n📞 wa.me/6287719010818`,
           );
           clearState(message);
           break;
@@ -708,11 +642,12 @@ async function handleNumberReply(
           await showBuatWebMenu(message);
           break;
         default:
-          await message.reply("❌ Balas *1* konfirmasi\nBalas *back* untuk kembali.");
+          await message.reply(
+            "❌ Balas *1* konfirmasi\nBalas *0* untuk kembali.",
+          );
       }
       break;
 
-    // ── GAMES ──
     case "games":
       switch (choice) {
         case 1:
@@ -752,7 +687,9 @@ async function handleNumberReply(
           await showMainMenu(message, name, isGroup, userId);
           break;
         default:
-          await message.reply("❌ Pilihan tidak valid.\nBalas *back* untuk kembali.");
+          await message.reply(
+            "❌ Pilihan tidak valid.\nBalas *0* untuk kembali.",
+          );
       }
       break;
 
@@ -778,7 +715,6 @@ async function handleNumberReply(
       }
       break;
 
-    // ── TOOLS ──
     case "tools":
       switch (choice) {
         case 1:
@@ -826,7 +762,9 @@ async function handleNumberReply(
           await showMainMenu(message, name, isGroup, userId);
           break;
         default:
-          await message.reply("❌ Pilihan tidak valid.\nBalas *back* untuk kembali.");
+          await message.reply(
+            "❌ Pilihan tidak valid.\nBalas *0* untuk kembali.",
+          );
       }
       break;
 
@@ -841,70 +779,44 @@ async function handleNumberReply(
 
 async function handleAddCmdInput(message, input, name, isGroup, userId) {
   const sep = input.indexOf("|");
-  if (sep === -1) {
+  if (sep === -1)
     return message.reply(
       "❌ Format salah!\nGunakan: *keyword|respon*\n\nBalas *cancel* untuk batal",
     );
-  }
-
   const keyword = input.substring(0, sep).trim().toLowerCase();
   const response = input.substring(sep + 1).trim();
-
-  if (!keyword || !response) {
-    return message.reply(
-      "❌ Keyword dan respon tidak boleh kosong.\nBalas *cancel* untuk batal",
-    );
-  }
-
+  if (!keyword || !response)
+    return message.reply("❌ Keyword dan respon tidak boleh kosong.");
   botConfig.customCommands[keyword] = response;
   saveConfig();
-
   await message.reply(
-    `✅ *Command Ditambahkan!*\n\n` +
-      `🔑 Command: *.${keyword}*\n` +
-      `💬 Respon: ${response}\n\n` +
-      `Test: ketik *.${keyword}*`,
+    `✅ *Command Ditambahkan!*\n\n🔑 *.${keyword}*\n💬 ${response}`,
   );
   await showOwnerMenu(message);
 }
 
 async function handleDelCmdInput(message, input, name, isGroup, userId) {
   const keyword = input.toLowerCase().replace(/^[.!/]/, "");
-
-  if (!botConfig.customCommands[keyword]) {
-    return message.reply(
-      `❌ Command *.${keyword}* tidak ditemukan.\nBalas *cancel* untuk batal`,
-    );
-  }
-
+  if (!botConfig.customCommands[keyword])
+    return message.reply(`❌ *.${keyword}* tidak ditemukan.`);
   delete botConfig.customCommands[keyword];
   saveConfig();
-
-  await message.reply(`✅ Command *.${keyword}* berhasil dihapus!`);
+  await message.reply(`✅ *.${keyword}* dihapus!`);
   await showOwnerMenu(message);
 }
 
 async function handleAddAdminInput(message, input, name, isGroup, userId) {
   const num = input.replace(/[\s\-\+@c.us]/g, "");
-  if (!/^\d{10,15}$/.test(num)) {
-    return message.reply(
-      "❌ Format nomor salah.\nContoh: _6281234567890_\nBalas *0* batal",
-    );
-  }
-
+  if (!/^\d{10,15}$/.test(num))
+    return message.reply("❌ Format nomor salah.\nContoh: _6281234567890_");
   const targetId = `${num}@c.us`;
-
   if (isOwner(targetId))
     return message.reply("❌ Owner tidak perlu dijadikan admin.");
   if (isAdminUser(targetId)) return message.reply("❌ Sudah menjadi admin.");
-
   botConfig.admins.push(targetId);
   saveConfig();
-
   await message.reply(
-    `✅ *Admin Ditambahkan!*\n\n` +
-      `📞 Nomor: ${num}\n` +
-      `🛡️ Total Admin: ${botConfig.admins.length}`,
+    `✅ Admin ditambahkan: ${num}\n🛡️ Total: ${botConfig.admins.length}`,
   );
   await showOwnerMenu(message);
 }
@@ -912,16 +824,11 @@ async function handleAddAdminInput(message, input, name, isGroup, userId) {
 async function handleDelAdminInput(message, input, name, isGroup, userId) {
   const num = input.replace(/[\s\-\+@c.us]/g, "");
   const targetId = `${num}@c.us`;
-
-  if (!isAdminUser(targetId))
-    return message.reply("❌ Nomor ini bukan admin.\nBalas *0* batal");
-  if (isOwner(targetId)) return message.reply("❌ Tidak bisa menghapus Owner.");
-
+  if (!isAdminUser(targetId)) return message.reply("❌ Bukan admin.");
+  if (isOwner(targetId)) return message.reply("❌ Tidak bisa hapus Owner.");
   botConfig.admins = botConfig.admins.filter((id) => id !== targetId);
   saveConfig();
-
   await message.reply(`✅ Admin *${num}* dihapus.`);
-
   const currentUserId = (await message.getContact()).id._serialized;
   if (isOwner(currentUserId)) await showOwnerMenu(message);
   else await showAdminRoleMenu(message);
@@ -929,24 +836,13 @@ async function handleDelAdminInput(message, input, name, isGroup, userId) {
 
 async function handleBanInput(message, input, name, isGroup, userId) {
   const num = input.replace(/[\s\-\+@c.us]/g, "");
-  if (!/^\d{10,15}$/.test(num)) {
-    return message.reply(
-      "❌ Format nomor salah.\nContoh: _6281234567890_\nBalas *0* batal",
-    );
-  }
-
+  if (!/^\d{10,15}$/.test(num)) return message.reply("❌ Format nomor salah.");
   const targetId = `${num}@c.us`;
-
   if (isOwner(targetId)) return message.reply("❌ Tidak bisa ban Owner.");
-  if (isBanned(targetId)) return message.reply("❌ User sudah di-ban.");
-
+  if (isBanned(targetId)) return message.reply("❌ Sudah di-ban.");
   botConfig.bannedUsers.push(targetId);
   saveConfig();
-
-  await message.reply(
-    `🚫 *User Di-Ban!*\n\n📞 Nomor: ${num}\nUser tidak bisa menggunakan bot.`,
-  );
-
+  await message.reply(`🚫 User di-ban: ${num}`);
   const currentUserId = (await message.getContact()).id._serialized;
   if (isOwner(currentUserId)) await showOwnerMenu(message);
   else await showAdminRoleMenu(message);
@@ -955,107 +851,347 @@ async function handleBanInput(message, input, name, isGroup, userId) {
 async function handleUnbanInput(message, input, name, isGroup, userId) {
   const num = input.replace(/[\s\-\+@c.us]/g, "");
   const targetId = `${num}@c.us`;
-
-  if (!isBanned(targetId))
-    return message.reply("❌ User tidak dalam daftar ban.\nBalas *0* batal");
-
+  if (!isBanned(targetId)) return message.reply("❌ User tidak di-ban.");
   botConfig.bannedUsers = botConfig.bannedUsers.filter((id) => id !== targetId);
   saveConfig();
-
   await message.reply(`✅ User *${num}* di-unban.`);
-
   const currentUserId = (await message.getContact()).id._serialized;
   if (isOwner(currentUserId)) await showOwnerMenu(message);
   else await showAdminRoleMenu(message);
 }
 
 // ═══════════════════════════════════════════════════════
-//  MENU DISPLAYS
+//  📋 MENU DISPLAYS — PROPER TEXT FORMAT
 // ═══════════════════════════════════════════════════════
 
 async function showMainMenu(message, name, isGroup, userId) {
   setState(message, "main");
   const role = getUserRole(userId);
 
-  await client.sendMessage(
-    message.from,
-    `╔══════════════════════╗\n` +
-      `║   🤖 *BOT MENU*      ║\n` +
-      `╚══════════════════════╝\n\n` +
-      `👋 Hai *${name}*!\n` +
-      `🏷️ Role: ${role}\n\n` +
-      `Pilih menu:\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `*1.* 🌐 Jasa Pembuatan Website\n` +
-      `*2.* 🎮 Games & Fun\n` +
-      `*3.* 🛠️ Tools\n` +
-      `*4.* 👑 Panel Admin/Owner\n` +
-      `*5.* ℹ️ Info\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `⚡ *Quick:*\n` +
-      `*.ping* *.sticker* *.everyone*\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `_Balas angka untuk memilih_`,
-  );
+  const menu =
+    `╔══════════════════════════╗\n` +
+    `║     🤖 *BOT MENU*        ║\n` +
+    `╚══════════════════════════╝\n` +
+    `\n` +
+    `👋 Hai *${name}*!\n` +
+    `🏷️ Role: ${role}\n` +
+    `\n` +
+    `┌──────────────────────────┐\n` +
+    `│  Pilih menu dengan       │\n` +
+    `│  membalas *angka*        │\n` +
+    `└──────────────────────────┘\n` +
+    `\n` +
+    `  *1.* 🌐 Jasa Buat Website\n` +
+    `  *2.* 🎮 Games & Fun\n` +
+    `  *3.* 🛠️ Tools\n` +
+    `  *4.* 👑 Panel Admin/Owner\n` +
+    `  *5.* ℹ️ Info\n` +
+    `\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `⚡ *Quick Commands:*\n` +
+    `  *.ping*  *.sticker*  *.everyone*\n` +
+    `  *.dice*  *.joke*  *.quote*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `\n` +
+    `_Balas angka 1-5 untuk memilih_ 👇`;
+
+  await client.sendMessage(message.from, menu);
 }
 
 async function showOwnerMenu(message) {
   setState(message, "owner");
 
-  await client.sendMessage(
-    message.from,
-    `╔══════════════════════╗\n` +
-      `║  👑 *OWNER PANEL*     ║\n` +
-      `╚══════════════════════╝\n\n` +
-      `━━━ 📝 *COMMAND* ━━━\n\n` +
-      `*1.* ➕ Tambah Command\n` +
-      `*2.* 🗑️ Hapus Command\n` +
-      `*3.* 📋 List Command\n\n` +
-      `━━━ 🛡️ *ADMIN* ━━━\n\n` +
-      `*4.* ➕ Tambah Admin\n` +
-      `*5.* 🗑️ Hapus Admin\n\n` +
-      `━━━ 🚫 *BAN* ━━━\n\n` +
-      `*6.* 🚫 Ban User\n` +
-      `*7.* ✅ Unban User\n\n` +
-      `━━━ 📊 *INFO* ━━━\n\n` +
-      `*8.* 📋 List Admin\n` +
-      `*9.* 📋 List Banned\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `_Balas angka | *0* kembali_`,
-  );
+  const menu =
+    `╔══════════════════════════╗\n` +
+    `║   👑 *OWNER PANEL*       ║\n` +
+    `╚══════════════════════════╝\n` +
+    `\n` +
+    `┌─── 📝 *COMMAND* ────────┐\n` +
+    `│                          │\n` +
+    `│  *1.* ➕ Tambah Command  │\n` +
+    `│  *2.* 🗑️ Hapus Command   │\n` +
+    `│  *3.* 📋 List Command    │\n` +
+    `│                          │\n` +
+    `├─── 🛡️ *ADMIN* ──────────┤\n` +
+    `│                          │\n` +
+    `│  *4.* ➕ Tambah Admin    │\n` +
+    `│  *5.* 🗑️ Hapus Admin     │\n` +
+    `│                          │\n` +
+    `├─── 🚫 *BAN* ────────────┤\n` +
+    `│                          │\n` +
+    `│  *6.* 🚫 Ban User       │\n` +
+    `│  *7.* ✅ Unban User     │\n` +
+    `│                          │\n` +
+    `├─── 📊 *INFO* ───────────┤\n` +
+    `│                          │\n` +
+    `│  *8.* 📋 List Admin     │\n` +
+    `│  *9.* 📋 List Banned    │\n` +
+    `│                          │\n` +
+    `└──────────────────────────┘\n` +
+    `\n` +
+    `_Balas angka | *0* kembali_ 👇`;
+
+  await client.sendMessage(message.from, menu);
 }
 
 async function showAdminRoleMenu(message) {
   setState(message, "admin_role");
 
-  await client.sendMessage(
-    message.from,
-    `╔══════════════════════╗\n` +
-      `║  🛡️ *ADMIN PANEL*     ║\n` +
-      `╚══════════════════════╝\n\n` +
-      `*1.* 🗑️ Hapus Admin\n` +
-      `*2.* 🚫 Ban User\n` +
-      `*3.* ✅ Unban User\n` +
-      `*4.* 📋 List Admin\n` +
-      `*5.* 📋 List Banned\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `_Balas angka | *0* kembali_`,
-  );
+  const menu =
+    `╔══════════════════════════╗\n` +
+    `║   🛡️ *ADMIN PANEL*       ║\n` +
+    `╚══════════════════════════╝\n` +
+    `\n` +
+    `  *1.* 🗑️ Hapus Admin\n` +
+    `  *2.* 🚫 Ban User\n` +
+    `  *3.* ✅ Unban User\n` +
+    `  *4.* 📋 List Admin\n` +
+    `  *5.* 📋 List Banned\n` +
+    `\n` +
+    `_Balas angka | *0* kembali_ 👇`;
+
+  await client.sendMessage(message.from, menu);
 }
 
 async function showInfo(message, contact, chat, userId) {
   setState(message, "main");
   const role = getUserRole(userId);
 
-  await message.reply(
-    `ℹ️ *Info:*\n\n` +
-      `👤 Nama: *${contact.pushname || "N/A"}*\n` +
-      `📞 Nomor: *${contact.number}*\n` +
-      `🏷️ Role: *${role}*\n` +
-      `💬 Chat: *${chat.name || "Private"}*\n` +
-      `👥 Group: *${chat.isGroup}*\n\n` +
-      `Balas *back* untuk kembali`,
-  );
+  const info =
+    `╔══════════════════════════╗\n` +
+    `║      ℹ️ *INFO*            ║\n` +
+    `╚══════════════════════════╝\n` +
+    `\n` +
+    `  👤 Nama   : *${contact.pushname || "N/A"}*\n` +
+    `  📞 Nomor  : *${contact.number}*\n` +
+    `  🏷️ Role   : *${role}*\n` +
+    `  💬 Chat   : *${chat.name || "Private"}*\n` +
+    `  👥 Group  : *${chat.isGroup ? "Ya" : "Tidak"}*\n` +
+    `\n` +
+    `_Balas *0* untuk kembali ke menu_ 👇`;
+
+  await client.sendMessage(message.from, info);
+}
+
+// ═══════════════════════════════════════════════════════
+//  🌐 BUAT WEB MENUS
+// ═══════════════════════════════════════════════════════
+
+async function showBuatWebMenu(message) {
+  setState(message, "buatweb");
+
+  const menu =
+    `╔═══════════════════════════════╗\n` +
+    `║  🌐 *JASA PEMBUATAN WEBSITE*  ║\n` +
+    `╚═══════════════════════════════╝\n` +
+    `\n` +
+    `  *1.* 📄 *Landing Page Starter*\n` +
+    `      💰 Rp1.400.000\n` +
+    `      ⏰ 2 hari • 🔄 Unlimited revisi\n` +
+    `\n` +
+    `  *2.* 💻 *Custom Dynamic Web*\n` +
+    `      💰 Rp2.500.000\n` +
+    `      ⏰ 20 hari • 🔄 7x revisi\n` +
+    `\n` +
+    `  *3.* 🚀 *Full-Service Premium*\n` +
+    `      💰 Rp3.500.000\n` +
+    `      ⏰ 30 hari • 🔄 20x revisi\n` +
+    `\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `_Balas *1-3* untuk detail | *0* kembali_ 👇`;
+
+  await client.sendMessage(message.from, menu);
+}
+
+async function showPaket1(message) {
+  setState(message, "paket1");
+
+  const detail =
+    `╔══════════════════════════════╗\n` +
+    `║  📄 *LANDING PAGE STARTER*   ║\n` +
+    `╚══════════════════════════════╝\n` +
+    `\n` +
+    `💰 Harga: *Rp1.400.000*\n` +
+    `⏰ Waktu: *2 hari kerja*\n` +
+    `🔄 Revisi: *Unlimited*\n` +
+    `\n` +
+    `┌─── ✅ *Fitur* ───────────────┐\n` +
+    `│                               │\n` +
+    `│  • 1 Halaman Landing Page     │\n` +
+    `│  • Desain Responsif (Mobile)  │\n` +
+    `│  • Integrasi Social Media     │\n` +
+    `│  • HTML/Tailwind CSS/JS/API   │\n` +
+    `│  • Source Code (Full)         │\n` +
+    `│                               │\n` +
+    `└───────────────────────────────┘\n` +
+    `\n` +
+    `  *1.* 🛒 *ORDER SEKARANG*\n` +
+    `  *0.* 🔙 Kembali\n` +
+    `\n` +
+    `_Balas angka untuk memilih_ 👇`;
+
+  await client.sendMessage(message.from, detail);
+}
+
+async function showPaket2(message) {
+  setState(message, "paket2");
+
+  const detail =
+    `╔══════════════════════════════╗\n` +
+    `║  💻 *CUSTOM DYNAMIC WEB*     ║\n` +
+    `╚══════════════════════════════╝\n` +
+    `\n` +
+    `💰 Harga: *Rp2.500.000*\n` +
+    `⏰ Waktu: *20 hari kerja*\n` +
+    `🔄 Revisi: *7x*\n` +
+    `\n` +
+    `┌─── ✅ *Fitur* ───────────────┐\n` +
+    `│                               │\n` +
+    `│  • Hingga 5 Halaman           │\n` +
+    `│  • Dashboard Admin & Login    │\n` +
+    `│  • Database MySQL & API       │\n` +
+    `│  • Framework Laravel          │\n` +
+    `│  • CRUD Management            │\n` +
+    `│                               │\n` +
+    `└───────────────────────────────┘\n` +
+    `\n` +
+    `  *1.* 🛒 *ORDER SEKARANG*\n` +
+    `  *0.* 🔙 Kembali\n` +
+    `\n` +
+    `_Balas angka untuk memilih_ 👇`;
+
+  await client.sendMessage(message.from, detail);
+}
+
+async function showPaket3(message) {
+  setState(message, "paket3");
+
+  const detail =
+    `╔══════════════════════════════╗\n` +
+    `║  🚀 *FULL-SERVICE PREMIUM*   ║\n` +
+    `╚══════════════════════════════╝\n` +
+    `\n` +
+    `💰 Harga: *Rp3.500.000*\n` +
+    `⏰ Waktu: *30 hari kerja*\n` +
+    `🔄 Revisi: *20x*\n` +
+    `\n` +
+    `┌─── ✅ *Fitur* ───────────────┐\n` +
+    `│                               │\n` +
+    `│  • UI/UX Kustom (Figma)       │\n` +
+    `│  • Fitur Kompleks (QR, Maps)  │\n` +
+    `│  • Keamanan & Validasi        │\n` +
+    `│  • Dokumentasi Sistem         │\n` +
+    `│  • Support 1 Bulan            │\n` +
+    `│                               │\n` +
+    `└───────────────────────────────┘\n` +
+    `\n` +
+    `  *1.* 🛒 *ORDER SEKARANG*\n` +
+    `  *0.* 🔙 Kembali\n` +
+    `\n` +
+    `_Balas angka untuk memilih_ 👇`;
+
+  await client.sendMessage(message.from, detail);
+}
+
+async function showOrderForm(message, contact, paketNum) {
+  setState(message, "order");
+  const names = {
+    1: "📄 Landing Page — Rp1.4jt",
+    2: "💻 Dynamic Web — Rp2.5jt",
+    3: "🚀 Premium Web — Rp3.5jt",
+  };
+
+  const form =
+    `╔══════════════════════════════╗\n` +
+    `║  🛒 *FORM PEMESANAN*         ║\n` +
+    `╚══════════════════════════════╝\n` +
+    `\n` +
+    `  📦 Paket : *${names[paketNum]}*\n` +
+    `  👤 Nama  : *${contact.pushname || contact.number}*\n` +
+    `  📅 Tgl   : *${new Date().toLocaleDateString("id-ID")}*\n` +
+    `\n` +
+    `  💳 Pembayaran:\n` +
+    `     • DP 50% di awal\n` +
+    `     • Via Bank / E-Wallet\n` +
+    `\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `\n` +
+    `  *1.* ✅ *KONFIRMASI ORDER*\n` +
+    `  *0.* 🔙 Kembali\n` +
+    `\n` +
+    `_Balas angka untuk memilih_ 👇`;
+
+  await client.sendMessage(message.from, form);
+}
+
+// ═══════════════════════════════════════════════════════
+//  🎮 GAMES MENU
+// ═══════════════════════════════════════════════════════
+
+async function showGamesMenu(message) {
+  setState(message, "games");
+
+  const menu =
+    `╔══════════════════════════╗\n` +
+    `║    🎮 *GAMES & FUN*      ║\n` +
+    `╚══════════════════════════╝\n` +
+    `\n` +
+    `  *1.* 🎲 Roll Dice\n` +
+    `  *2.* 🪙 Flip Coin\n` +
+    `  *3.* ✊ Rock Paper Scissors\n` +
+    `  *4.* 🎱 Magic 8-Ball\n` +
+    `  *5.* 😂 Random Joke\n` +
+    `  *6.* 📝 Random Quote\n` +
+    `  *7.* ⭐ Rate Anything\n` +
+    `\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `_Balas angka | *0* kembali_ 👇`;
+
+  await client.sendMessage(message.from, menu);
+}
+
+async function showRPSMenu(message) {
+  setState(message, "rps");
+
+  const menu =
+    `╔══════════════════════════╗\n` +
+    `║  ✊ *ROCK PAPER SCISSORS* ║\n` +
+    `╚══════════════════════════╝\n` +
+    `\n` +
+    `  Pilih senjatamu!\n` +
+    `\n` +
+    `  *1.* 🪨 Rock (Batu)\n` +
+    `  *2.* 📄 Paper (Kertas)\n` +
+    `  *3.* ✂️ Scissors (Gunting)\n` +
+    `\n` +
+    `_Balas *1-3* | *0* kembali_ 👇`;
+
+  await client.sendMessage(message.from, menu);
+}
+
+// ═══════════════════════════════════════════════════════
+//  🛠️ TOOLS MENU
+// ═══════════════════════════════════════════════════════
+
+async function showToolsMenu(message) {
+  setState(message, "tools");
+
+  const menu =
+    `╔══════════════════════════╗\n` +
+    `║     🛠️ *TOOLS*           ║\n` +
+    `╚══════════════════════════╝\n` +
+    `\n` +
+    `  *1.* 📊 Calculator\n` +
+    `  *2.* 🔤 UPPERCASE\n` +
+    `  *3.* 🔡 lowercase\n` +
+    `  *4.* 🔄 Reverse Text\n` +
+    `  *5.* 📏 Count Characters\n` +
+    `  *6.* 🖼️ Sticker Maker\n` +
+    `\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `_Balas angka | *0* kembali_ 👇`;
+
+  await client.sendMessage(message.from, menu);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1066,28 +1202,22 @@ async function cmdAddCommand(message, args) {
   if (!args) return message.reply("❌ Format: *.addcommand keyword|respon*");
   const sep = args.indexOf("|");
   if (sep === -1) return message.reply("❌ Gunakan format: *keyword|respon*");
-
   const keyword = args.substring(0, sep).trim().toLowerCase();
   const response = args.substring(sep + 1).trim();
-
   if (!keyword || !response)
     return message.reply("❌ Keyword dan respon tidak boleh kosong.");
-
   botConfig.customCommands[keyword] = response;
   saveConfig();
-
   await message.reply(
-    `✅ *Command Ditambahkan!*\n` + `🔑 *.${keyword}*\n` + `💬 ${response}`,
+    `✅ *Command Ditambahkan!*\n🔑 *.${keyword}*\n💬 ${response}`,
   );
 }
 
 async function cmdDelCommand(message, args) {
   if (!args) return message.reply("❌ Format: *.delcommand keyword*");
   const keyword = args.toLowerCase();
-
   if (!botConfig.customCommands[keyword])
     return message.reply(`❌ *.${keyword}* tidak ditemukan.`);
-
   delete botConfig.customCommands[keyword];
   saveConfig();
   await message.reply(`✅ *.${keyword}* dihapus.`);
@@ -1095,16 +1225,11 @@ async function cmdDelCommand(message, args) {
 
 async function cmdListCommand(message) {
   const cmds = Object.keys(botConfig.customCommands);
-  if (cmds.length === 0) {
-    return await client.sendMessage(
-      message.from,
-      "📋 Belum ada custom command.\n\nTambah dengan pilih menu *1* di Owner Panel.",
-    );
-  }
-
+  if (cmds.length === 0)
+    return client.sendMessage(message.from, "📋 Belum ada custom command.");
   let text = `📋 *CUSTOM COMMANDS (${cmds.length})*\n\n`;
   cmds.forEach((cmd, i) => {
-    text += `${i + 1}. *.${cmd}* → ${botConfig.customCommands[cmd].substring(0, 50)}${botConfig.customCommands[cmd].length > 50 ? "..." : ""}\n`;
+    text += `  ${i + 1}. *.${cmd}* → ${botConfig.customCommands[cmd].substring(0, 50)}${botConfig.customCommands[cmd].length > 50 ? "..." : ""}\n`;
   });
   await client.sendMessage(message.from, text);
 }
@@ -1114,11 +1239,9 @@ async function cmdAddAdmin(message, chat, args) {
   const num = args.replace(/[\s\-\+@c.us]/g, "");
   if (!/^\d{10,15}$/.test(num)) return message.reply("❌ Format nomor salah.");
   const targetId = `${num}@c.us`;
-
   if (isOwner(targetId))
     return message.reply("❌ Owner tidak perlu jadi admin.");
   if (isAdminUser(targetId)) return message.reply("❌ Sudah admin.");
-
   botConfig.admins.push(targetId);
   saveConfig();
   await message.reply(`✅ Admin ditambahkan: ${num}`);
@@ -1128,10 +1251,8 @@ async function cmdDelAdmin(message, chat, args, requesterId) {
   if (!args) return message.reply("❌ Format: *.deladmin 628xxxx*");
   const num = args.replace(/[\s\-\+@c.us]/g, "");
   const targetId = `${num}@c.us`;
-
   if (!isAdminUser(targetId)) return message.reply("❌ Bukan admin.");
   if (isOwner(targetId)) return message.reply("❌ Tidak bisa hapus Owner.");
-
   botConfig.admins = botConfig.admins.filter((id) => id !== targetId);
   saveConfig();
   await message.reply(`✅ Admin dihapus: ${num}`);
@@ -1141,17 +1262,10 @@ async function cmdBanUser(message, chat, args, requesterId) {
   if (!args) return message.reply("❌ Format: *.banuser 628xxxx*");
   const num = args.replace(/[\s\-\+@c.us]/g, "");
   const targetId = `${num}@c.us`;
-
   if (isOwner(targetId)) return message.reply("❌ Tidak bisa ban Owner.");
   if (isBanned(targetId)) return message.reply("❌ Sudah di-ban.");
-
-  // Admin tidak bisa ban admin lain (kecuali owner)
-  if (isAdminUser(targetId) && !isOwner(requesterId)) {
-    return message.reply(
-      "❌ Admin tidak bisa ban admin lain.\nHanya Owner yang bisa.",
-    );
-  }
-
+  if (isAdminUser(targetId) && !isOwner(requesterId))
+    return message.reply("❌ Admin tidak bisa ban admin lain.");
   botConfig.bannedUsers.push(targetId);
   saveConfig();
   await message.reply(`🚫 User di-ban: ${num}`);
@@ -1161,170 +1275,39 @@ async function cmdUnbanUser(message, args) {
   if (!args) return message.reply("❌ Format: *.unban 628xxxx*");
   const num = args.replace(/[\s\-\+@c.us]/g, "");
   const targetId = `${num}@c.us`;
-
   if (!isBanned(targetId)) return message.reply("❌ User tidak di-ban.");
-
   botConfig.bannedUsers = botConfig.bannedUsers.filter((id) => id !== targetId);
   saveConfig();
   await message.reply(`✅ User di-unban: ${num}`);
 }
 
 async function cmdListAdmin(message) {
-  if (botConfig.admins.length === 0) {
-    return await client.sendMessage(
+  if (botConfig.admins.length === 0)
+    return client.sendMessage(
       message.from,
       "📋 Belum ada admin.\n\n👑 Owner: " +
         botConfig.owner.replace("@c.us", ""),
     );
-  }
-
-  let text = `📋 *DAFTAR ADMIN (${botConfig.admins.length})*\n\n`;
-  text += `👑 Owner: ${botConfig.owner.replace("@c.us", "")}\n\n`;
+  let text = `📋 *DAFTAR ADMIN (${botConfig.admins.length})*\n\n👑 Owner: ${botConfig.owner.replace("@c.us", "")}\n\n`;
   botConfig.admins.forEach((id, i) => {
-    text += `${i + 1}. 🛡️ ${id.replace("@c.us", "")}\n`;
+    text += `  ${i + 1}. 🛡️ ${id.replace("@c.us", "")}\n`;
   });
   await client.sendMessage(message.from, text);
 }
 
 async function cmdListBan(message) {
-  if (botConfig.bannedUsers.length === 0) {
-    return await client.sendMessage(
-      message.from,
-      "📋 Tidak ada user yang di-ban.",
-    );
-  }
-
+  if (botConfig.bannedUsers.length === 0)
+    return client.sendMessage(message.from, "📋 Tidak ada user yang di-ban.");
   let text = `📋 *DAFTAR BANNED (${botConfig.bannedUsers.length})*\n\n`;
   botConfig.bannedUsers.forEach((id, i) => {
-    text += `${i + 1}. 🚫 ${id.replace("@c.us", "")}\n`;
+    text += `  ${i + 1}. 🚫 ${id.replace("@c.us", "")}\n`;
   });
   await client.sendMessage(message.from, text);
 }
 
 // ═══════════════════════════════════════════════════════
-//  BUAT WEB MENUS
+//  GAME & TOOL FUNCTIONS
 // ═══════════════════════════════════════════════════════
-
-async function showBuatWebMenu(message) {
-  setState(message, "buatweb");
-
-  await client.sendMessage(
-    message.from,
-    `╔═══════════════════════════════╗\n` +
-      `║  🌐 *JASA PEMBUATAN WEBSITE*  ║\n` +
-      `╚═══════════════════════════════╝\n\n` +
-      `*1.* 📄 *Landing Page Starter* — Rp1.4jt\n` +
-      `   ⏰ 2 hari | 🔄 Revisi tak terbatas\n\n` +
-      `*2.* 💻 *Custom Dynamic Web* — Rp2.5jt\n` +
-      `   ⏰ 20 hari | 🔄 7x revisi\n\n` +
-      `*3.* 🚀 *Full-Service Premium* — Rp3.5jt\n` +
-      `   ⏰ 30 hari | 🔄 20x revisi\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `_Balas *1*, *2*, *3* detail | *0* kembali_`,
-  );
-}
-
-async function showPaket1(message) {
-  setState(message, "paket1");
-  await client.sendMessage(
-    message.from,
-    `📄 *LANDING PAGE STARTER*\n\n` +
-      `💰 *Rp1.400.000* | ⏰ 2 hari | 🔄 Unlimited\n\n` +
-      `✅ 1 Halaman Landing Page\n` +
-      `✅ Desain Responsif\n` +
-      `✅ Integrasi Social Media\n` +
-      `✅ HTML/Tailwind CSS/JS/API\n` +
-      `✅ Source Code\n\n` +
-      `*1.* 🛒 ORDER | *0.* 🔙 Kembali`,
-  );
-}
-
-async function showPaket2(message) {
-  setState(message, "paket2");
-  await client.sendMessage(
-    message.from,
-    `💻 *CUSTOM DYNAMIC WEB*\n\n` +
-      `💰 *Rp2.500.000* | ⏰ 20 hari | 🔄 7x\n\n` +
-      `✅ Hingga 5 Halaman\n` +
-      `✅ Dashboard Admin & Login\n` +
-      `✅ Database MySQL & API\n` +
-      `✅ Framework Laravel\n` +
-      `✅ CRUD Management\n\n` +
-      `*1.* 🛒 ORDER | *0.* 🔙 Kembali`,
-  );
-}
-
-async function showPaket3(message) {
-  setState(message, "paket3");
-  await client.sendMessage(
-    message.from,
-    `🚀 *FULL-SERVICE PREMIUM WEB*\n\n` +
-      `💰 *Rp3.500.000* | ⏰ 30 hari | 🔄 20x\n\n` +
-      `✅ UI/UX Kustom (Figma)\n` +
-      `✅ Fitur Kompleks (QRCode, Maps)\n` +
-      `✅ Keamanan & Validasi\n` +
-      `✅ Dokumentasi Sistem\n` +
-      `✅ Support 1 Bulan\n\n` +
-      `*1.* 🛒 ORDER | *0.* 🔙 Kembali`,
-  );
-}
-
-async function showOrderForm(message, contact, paketNum) {
-  setState(message, "order");
-  const names = {
-    1: "Landing Page — Rp1.4jt",
-    2: "Dynamic Web — Rp2.5jt",
-    3: "Premium Web — Rp3.5jt",
-  };
-
-  await client.sendMessage(
-    message.from,
-    `🛒 *FORM PEMESANAN*\n\n` +
-      `📦 ${names[paketNum]}\n` +
-      `👤 ${contact.pushname || contact.number}\n` +
-      `📅 ${new Date().toLocaleDateString("id-ID")}\n\n` +
-      `💳 DP 50% di awal\n` +
-      `💳 Bank / E-Wallet\n\n` +
-      `*1.* ✅ KONFIRMASI ORDER\n` +
-      `*0.* 🔙 Kembali`,
-  );
-}
-
-// ═══════════════════════════════════════════════════════
-//  GAMES & TOOLS
-// ═══════════════════════════════════════════════════════
-
-async function showGamesMenu(message) {
-  setState(message, "games");
-  await client.sendMessage(
-    message.from,
-    `🎮 *GAMES MENU*\n\n` +
-      `*1.* 🎲 Roll Dice\n*2.* 🪙 Flip Coin\n*3.* ✊ RPS\n` +
-      `*4.* 🎱 Magic 8-Ball\n*5.* 😂 Joke\n*6.* 📝 Quote\n*7.* ⭐ Rate\n\n` +
-      `_Balas angka | *0* kembali_`,
-  );
-}
-
-async function showRPSMenu(message) {
-  setState(message, "rps");
-  await client.sendMessage(
-    message.from,
-    `✊ *ROCK PAPER SCISSORS*\n\n*1.* 🪨 Rock\n*2.* 📄 Paper\n*3.* ✂️ Scissors\n\n_Balas *1-3* | *0* kembali_`,
-  );
-}
-
-async function showToolsMenu(message) {
-  setState(message, "tools");
-  await client.sendMessage(
-    message.from,
-    `🛠️ *TOOLS MENU*\n\n` +
-      `*1.* 📊 Calculator\n*2.* 🔤 UPPERCASE\n*3.* 🔡 lowercase\n` +
-      `*4.* 🔄 Reverse\n*5.* 📏 Count\n*6.* 🖼️ Sticker\n\n` +
-      `_Balas angka | *0* kembali_`,
-  );
-}
-
-// ── Game Functions ──
 
 async function cmdPing(message) {
   const start = Date.now();
@@ -1356,7 +1339,7 @@ async function cmdRPS(message, choice) {
           (choice === "scissors" && bot === "paper")
         ? "🎉 MENANG!"
         : "😈 KALAH!";
-  await message.reply(`Kamu: ${e[choice]} vs Bot: ${e[bot]}\n${r}`);
+  await message.reply(`Kamu: ${e[choice]} vs Bot: ${e[bot]}\n\n${r}`);
 }
 
 async function cmd8Ball(message, q) {
@@ -1378,6 +1361,8 @@ async function cmdJoke(message) {
     "Programmer suka dark mode karena light attracts bugs! 🐛",
     "JS developer sedih, gak bisa Express perasaannya 😂",
     "SQL masuk bar: 'Boleh JOIN?' 🍺",
+    "!false — It's funny because it's true 🤣",
+    "Programmer meninggal di shower, instruksi shampoo: Lather, Rinse, Repeat ♾️",
   ];
   await message.reply(`😂 ${j[Math.floor(Math.random() * j.length)]}`);
 }
